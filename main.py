@@ -159,14 +159,22 @@ def summarize_with_gemini(articles):
         "contents": [{"parts": [{"text": prompt}]}],
     }
 
-    response = requests.post(GEMINI_URL, json=payload, timeout=60)
-    if not response.ok:
-        raise RuntimeError(
-            f"Gemini API error {response.status_code}: {response.text[:1000]}"
-        )
-    data = response.json()
+    import time
 
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    last_error = None
+    for attempt in range(4):
+        response = requests.post(GEMINI_URL, json=payload, timeout=60)
+        if response.ok:
+            data = response.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+
+        last_error = f"Gemini API error {response.status_code}: {response.text[:1000]}"
+        if response.status_code in (429, 500, 503):
+            time.sleep(2 ** attempt * 5)  # 5s, 10s, 20s, 40s
+            continue
+        raise RuntimeError(last_error)
+
+    raise RuntimeError(f"Gemini API still failing after retries: {last_error}")
 
 
 # ---------------------------------------------------------------------------
