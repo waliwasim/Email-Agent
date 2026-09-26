@@ -120,7 +120,12 @@ def _clean_summary(raw_html, max_len=400):
 
     text = re.sub("<[^<]+?>", "", raw_html or "")
     text = " ".join(text.split())
-    return text[:max_len]
+    if len(text) <= max_len:
+        return text
+    # cut at the last space so we don't leave a chopped-off word
+    truncated = text[:max_len]
+    last_space = truncated.rfind(" ")
+    return (truncated[:last_space] if last_space > 0 else truncated) + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +144,9 @@ def build_prompt(articles):
         "- A 'Research & Industry News' bulleted section",
         "- Keep each bullet to one line, punchy and specific (mention the company/product name)",
         "- Do not invent facts not present in the source material",
+        "- IMPORTANT: Keep the entire summary under 450 words total. Always finish with a",
+        "  complete sentence — never cut a sentence or bullet off mid-way. If you are running",
+        "  long, drop less important bullets rather than leaving anything unfinished.",
         "",
         "SOURCE MATERIAL:",
     ]
@@ -149,14 +157,41 @@ def build_prompt(articles):
     return "\n".join(lines)
 
 
+def _trim_to_last_complete_sentence(text):
+    """Safety net: if the model still got cut off mid-sentence despite
+    instructions, trim back to the last clean sentence/bullet ending rather
+    than emailing a broken fragment."""
+    text = text.rstrip()
+    if not text:
+        return text
+
+    # Already ends cleanly (sentence punctuation, or a markdown list/heading line)
+    if text[-1] in ".!?" or text.endswith((":", '"', "”", ")")):
+        return text
+
+    last_break = max(text.rfind(". "), text.rfind("! "), text.rfind("? "), text.rfind("\n"))
+    if last_break >= 10:  # a valid break exists and leaves a non-trivial result
+        return text[: last_break + 1].rstrip()
+    return text  # nothing better to do — return as-is rather than gut the summary
+
+
 def summarize_with_gemini(articles):
     if not articles:
         return "No new AI articles were found in the lookback window today."
+
+    # Cap how much source material goes in, so the expected output length
+    # stays comfortably within the token budget below.
+    MAX_ARTICLES = 35
+    articles = articles[:MAX_ARTICLES]
 
     prompt = build_prompt(articles)
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": 2048,
+            "temperature": 0.4,
+        },
     }
 
     import time
@@ -166,7 +201,15 @@ def summarize_with_gemini(articles):
         response = requests.post(GEMINI_URL, json=payload, timeout=60)
         if response.ok:
             data = response.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+            candidate = data["candidates"][0]
+            text = candidate["content"]["parts"][0]["text"]
+            finish_reason = candidate.get("finishReason")
+
+            if finish_reason == "MAX_TOKENS":
+                print("Warning: Gemini hit the output token limit; trimming to last complete sentence.")
+                text = _trim_to_last_complete_sentence(text)
+
+            return text.strip()
 
         last_error = f"Gemini API error {response.status_code}: {response.text[:1000]}"
         if response.status_code in (429, 500, 503):
@@ -203,6 +246,16 @@ def send_email(summary_text, article_count):
 
 
 def _to_html(summary_text, today, article_count):
+    import html
+    import re
+
+    def format_inline(text):
+        text = html.escape(text)
+        # convert **bold** and *italic* markdown (after escaping, so this is safe)
+        text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+        text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<em>\1</em>", text)
+        return text
+
     # Turn simple markdown-ish text (## headers, - bullets) into basic HTML
     lines = summary_text.split("\n")
     html_lines = []
@@ -216,16 +269,16 @@ def _to_html(summary_text, today, article_count):
             if not in_list:
                 html_lines.append("<ul>")
                 in_list = True
-            html_lines.append(f"<li>{stripped[2:]}</li>")
+            html_lines.append(f"<li>{format_inline(stripped[2:])}</li>")
             continue
         if in_list:
             html_lines.append("</ul>")
             in_list = False
         if stripped.startswith("#"):
             text = stripped.lstrip("#").strip()
-            html_lines.append(f"<h3>{text}</h3>")
+            html_lines.append(f"<h3>{format_inline(text)}</h3>")
         else:
-            html_lines.append(f"<p>{stripped}</p>")
+            html_lines.append(f"<p>{format_inline(stripped)}</p>")
 
     if in_list:
         html_lines.append("</ul>")
@@ -235,7 +288,7 @@ def _to_html(summary_text, today, article_count):
     return f"""
     <html>
       <body style="font-family: -apple-system, Arial, sans-serif; max-width: 640px; margin: auto; color: #1a1a1a;">
-        <h2 style="border-bottom: 2px solid #4f46e5; padding-bottom: 8px;">🤖 AI Daily Digest — {today}</h2>
+        <h2 style="border-bottom: 2px solid #4f46e5; padding-bottom: 8px;">🤖 AI Daily Digest — {html.escape(today)}</h2>
         <p style="color:#555; font-size: 13px;">Summarized from {article_count} articles across major AI news sources.</p>
         {body}
         <hr style="margin-top:32px;">
