@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/home/runner/work/Email-Agent/Email-Agent/main.py", line 261, in <module>
+    main()
+  File "/home/runner/work/Email-Agent/Email-Agent/main.py", line 251, in main
+    summary = summarize_with_gemini(articles)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/Email-Agent/Email-Agent/main.py", line 164, in summarize_with_gemini
+    raise RuntimeError(
+RuntimeError: Gemini API error 404: {
+  "error": {
+    "code": 404,
+    "message": "This model models/gemini-2.0-flash is no longer available. Please update your code to use models/gemini-3.8-flash for the latest features and improvements. We recommend you to use the Interactions API (https://ai.google.dev/gemini-api/docs/get-started).",
+    "status": "NOT_FOUND"
+  }
+}
+
