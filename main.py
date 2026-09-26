@@ -44,16 +44,33 @@ RSS_FEEDS = [
 # Only include articles published within this many hours (catches "daily" news)
 LOOKBACK_HOURS = 30
 
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 GEMINI_MODEL = "gemini-2.0-flash"  # fast + on the free tier
-GEMINI_URL = (
-    f"https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-)
+GEMINI_API_KEY = None
+GEMINI_URL = None
+GMAIL_ADDRESS = None
+GMAIL_APP_PASSWORD = None
+RECIPIENT_EMAIL = None
 
-GMAIL_ADDRESS = os.environ["GMAIL_ADDRESS"]
-GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
-RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
+
+def load_config():
+    """Read required env vars into module globals. Called inside the
+    top-level try/except so missing/misnamed secrets get logged instead
+    of crashing before any error handling runs."""
+    global GEMINI_API_KEY, GEMINI_URL, GMAIL_ADDRESS, GMAIL_APP_PASSWORD, RECIPIENT_EMAIL
+
+    required = ["GEMINI_API_KEY", "GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "RECIPIENT_EMAIL"]
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"Missing required environment variable(s): {', '.join(missing)}")
+
+    GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+    GEMINI_URL = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
+    GMAIL_ADDRESS = os.environ["GMAIL_ADDRESS"]
+    GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
+    RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +160,10 @@ def summarize_with_gemini(articles):
     }
 
     response = requests.post(GEMINI_URL, json=payload, timeout=60)
-    response.raise_for_status()
+    if not response.ok:
+        raise RuntimeError(
+            f"Gemini API error {response.status_code}: {response.text[:1000]}"
+        )
     data = response.json()
 
     return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -222,6 +242,7 @@ def _to_html(summary_text, today, article_count):
 # ---------------------------------------------------------------------------
 
 def main():
+    load_config()
     print("Fetching recent AI articles...")
     articles = fetch_recent_articles()
     print(f"Found {len(articles)} recent articles.")
