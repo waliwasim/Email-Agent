@@ -236,4 +236,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+
+        with open("debug_log.txt", "w") as f:
+            f.write(traceback.format_exc())
+        raise

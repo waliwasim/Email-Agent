@@ -29,3 +29,14 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: python main.py
+
+      - name: Commit debug log on failure
+        if: failure()
+        run: |
+          if [ -f debug_log.txt ]; then
+            git config user.email "actions@github.com"
+            git config user.name "GitHub Actions"
+            git add debug_log.txt
+            git commit -m "debug log [skip ci]"
+            git push
+          fi
