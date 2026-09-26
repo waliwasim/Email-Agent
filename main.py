@@ -63,14 +63,15 @@ def load_config():
     if missing:
         raise RuntimeError(f"Missing required environment variable(s): {', '.join(missing)}")
 
-    GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+    GEMINI_API_KEY = os.environ["GEMINI_API_KEY"].strip()
     GEMINI_URL = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     )
-    GMAIL_ADDRESS = os.environ["GMAIL_ADDRESS"]
-    GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
-    RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"]
+    GMAIL_ADDRESS = os.environ["GMAIL_ADDRESS"].strip()
+    # Gmail app passwords are often copy-pasted with spaces (as Google displays them)
+    GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"].strip().replace(" ", "")
+    RECIPIENT_EMAIL = os.environ["RECIPIENT_EMAIL"].strip()
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +81,23 @@ def load_config():
 def fetch_recent_articles():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
     articles = []
+    seen_titles = set()
 
     for feed_url in RSS_FEEDS:
         try:
-            feed = feedparser.parse(feed_url)
+            # Fetch with an explicit timeout first — feedparser.parse(url) has
+            # no timeout of its own and can hang the whole job on a slow feed.
+            resp = requests.get(
+                feed_url, timeout=15, headers={"User-Agent": "Mozilla/5.0 (AI Digest Bot)"}
+            )
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.content)
         except Exception as e:
             print(f"Could not read feed {feed_url}: {e}")
+            continue
+
+        if feed.bozo and not feed.entries:
+            print(f"Feed looked malformed and had no entries, skipping: {feed_url} ({feed.bozo_exception})")
             continue
 
         source_name = feed.feed.get("title", feed_url)
@@ -95,15 +107,24 @@ def fetch_recent_articles():
             if published is None or published < cutoff:
                 continue
 
+            title = entry.get("title", "Untitled")
+            dedup_key = " ".join(title.lower().split())
+            if dedup_key in seen_titles:
+                continue  # same story already picked up from another feed
+            seen_titles.add(dedup_key)
+
             articles.append(
                 {
                     "source": source_name,
-                    "title": entry.get("title", "Untitled"),
+                    "title": title,
                     "link": entry.get("link", ""),
                     "summary": _clean_summary(entry.get("summary", "")),
+                    "published": published,
                 }
             )
 
+    # Most recent first, so if we later cap the list we keep the freshest news
+    articles.sort(key=lambda a: a["published"], reverse=True)
     return articles
 
 
@@ -201,15 +222,27 @@ def summarize_with_gemini(articles):
         response = requests.post(GEMINI_URL, json=payload, timeout=60)
         if response.ok:
             data = response.json()
-            candidate = data["candidates"][0]
-            text = candidate["content"]["parts"][0]["text"]
+            candidates = data.get("candidates") or []
+
+            if not candidates:
+                block_reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
+                print(f"Warning: Gemini returned no candidates (blockReason={block_reason}). Falling back to a plain list.")
+                return _fallback_plain_summary(articles)
+
+            candidate = candidates[0]
+            parts = candidate.get("content", {}).get("parts", [])
+            if not parts:
+                print("Warning: Gemini candidate had no text content. Falling back to a plain list.")
+                return _fallback_plain_summary(articles)
+
+            text = parts[0].get("text", "")
             finish_reason = candidate.get("finishReason")
 
             if finish_reason == "MAX_TOKENS":
                 print("Warning: Gemini hit the output token limit; trimming to last complete sentence.")
                 text = _trim_to_last_complete_sentence(text)
 
-            return text.strip()
+            return text.strip() or _fallback_plain_summary(articles)
 
         last_error = f"Gemini API error {response.status_code}: {response.text[:1000]}"
         if response.status_code in (429, 500, 503):
@@ -218,6 +251,15 @@ def summarize_with_gemini(articles):
         raise RuntimeError(last_error)
 
     raise RuntimeError(f"Gemini API still failing after retries: {last_error}")
+
+
+def _fallback_plain_summary(articles):
+    """Used if Gemini can't produce a summary for some reason (safety filter,
+    empty response, etc.) — better to email a plain headline list than nothing."""
+    lines = ["Gemini couldn't generate a written summary today, so here are today's raw headlines:", ""]
+    for a in articles[:35]:
+        lines.append(f"- [{a['source']}] {a['title']} ({a['link']})")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
