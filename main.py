@@ -44,7 +44,7 @@ RSS_FEEDS = [
 # Only include articles published within this many hours (catches "daily" news)
 LOOKBACK_HOURS = 30
 
-GEMINI_MODEL = "gemini-2.0-flash"  # fast + on the free tier
+GEMINI_MODEL = "gemini-3.8-flash"  # fast + on the free tier
 GEMINI_API_KEY = None
 GEMINI_URL = None
 GMAIL_ADDRESS = None
