@@ -33,13 +33,23 @@ jobs:
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: python main.py
 
-      - name: Commit debug log on failure
+      - name: Upload debug log via API on failure
         if: failure()
         run: |
           if [ -f debug_log.txt ]; then
-            git config user.email "actions@github.com"
-            git config user.name "GitHub Actions"
-            git add debug_log.txt
-            git commit -m "debug log [skip ci]"
-            git push
+            CONTENT=$(base64 -w0 debug_log.txt)
+            SHA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/contents/debug_log.txt" \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('sha',''))")
+            if [ -n "$SHA" ]; then
+              curl -s -X PUT -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/contents/debug_log.txt" \
+                -d "{\"message\":\"debug log\",\"content\":\"$CONTENT\",\"sha\":\"$SHA\"}"
+            else
+              curl -s -X PUT -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/contents/debug_log.txt" \
+                -d "{\"message\":\"debug log\",\"content\":\"$CONTENT\"}"
+            fi
+          else
+            echo "No debug_log.txt was produced"
           fi
