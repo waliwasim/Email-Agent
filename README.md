@@ -1,4 +1,4 @@
-# AI Daily Digest Agent (100% Free)
+# AI Daily News Agent
 
 Emails you a daily summary of what's happening in AI — new tools, releases, and
 research — pulled from major AI news RSS feeds and summarized by Google Gemini's
